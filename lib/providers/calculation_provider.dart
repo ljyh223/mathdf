@@ -303,7 +303,7 @@ class CalculationProvider with ChangeNotifier {
       final latex = await _ocrService.recognize(imageBytes);
 
       if (latex.isNotEmpty) {
-        _expression = latex;
+        _expression = latex.replaceAll(" ", "");
       } else {
         _error = '未能识别出公式';
       }

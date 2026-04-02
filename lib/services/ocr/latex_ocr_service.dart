@@ -73,7 +73,7 @@ class LatexOcrService {
           '[OCR] Iteration $i: r=$r, w=$w, h=$h, processed.length=${processed.length}, paddedImg=${paddedImg.width}x${paddedImg.height}',
         );
 
-        final inputShape = [1, 1, h, w];
+        final inputShape = [1, 1, paddedImg.height, paddedImg.width];
         final input = await OrtValue.fromList(processed, inputShape);
         final output = await _modelManager.runImageResizer(input);
         await input.dispose();
@@ -120,11 +120,13 @@ class LatexOcrService {
         );
         finalImg = processed;
         finalPadded = paddedImg;
-        w = finalPadded.width;
-        h = finalPadded.height;
       }
 
-      final context = await _runEncoder(finalImg!, w, h);
+      final context = await _runEncoder(
+        finalImg!,
+        finalPadded!.width,
+        finalPadded.height,
+      );
       final tokens = await _runDecoder(context);
       final results = _tokenizer.tokensToStrings(tokens);
       final latex = results.isNotEmpty ? results[0] : '';
@@ -185,28 +187,33 @@ class LatexOcrService {
 
       if (output == null) break;
 
+      // 1. 获取扁平化的输出
       final logitsList = await output.asFlattenedList();
       await output.dispose();
 
-      final logits = logitsList
-          .map<double>((e) => (e as num).toDouble())
-          .toList();
+      // 2. 计算最后一个时间步的偏移量
+      final vocabSize = logitsList.length ~/ currentTokens.length;
+      final startIndex = (currentTokens.length - 1) * vocabSize;
 
-      final vocabSize = logits.length ~/ currentTokens.length;
-      final lastLogits = logits.sublist(
-        (currentTokens.length - 1) * vocabSize,
-        currentTokens.length * vocabSize,
-      );
+      // 3. 极速贪婪搜索 (Argmax)，绝对不创建新的 List，直接原地比较！
+      int bestToken = 0;
+      double maxLogit = double.negativeInfinity;
 
-      final filtered = _topK(lastLogits, threshold: 0.9);
-      final probs = _softmax(filtered, ModelConfig.temperature);
-      final sample = _multinomial(probs);
+      for (int i = 0; i < vocabSize; i++) {
+        // 直接从原有 List 取值强转，避免了全量 map 操作
+        final val = (logitsList[startIndex + i] as num).toDouble();
+        if (val > maxLogit) {
+          maxLogit = val;
+          bestToken = i;
+        }
+      }
 
-      tokens.add(sample);
+      // 4. 将概率最大的 Token 加入序列
+      tokens.add(bestToken);
       mask.add(true);
 
-      if (sample == ModelConfig.eosToken) {
-        break;
+      if (bestToken == ModelConfig.eosToken) {
+        break; // 遇到结束符，完美退出
       }
     }
 
