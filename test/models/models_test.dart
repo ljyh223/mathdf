@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mathdf/models/calculation_type.dart';
-import 'package:mathdf/models/calculation_request.dart';
+import 'package:mathdf/models/api_requests.dart';
 import 'package:mathdf/models/calculation_result.dart';
 
 void main() {
@@ -14,38 +14,113 @@ void main() {
       expect(CalculationType.equation.displayName, equals('方程'));
       expect(CalculationType.derivative.displayName, equals('导数'));
     });
-
-    test('should have correct endpoints', () {
-      expect(CalculationType.integral.endpoint, equals('/int/calculate.php'));
-      expect(CalculationType.equation.endpoint, equals('/equ/calculate.php'));
-    });
   });
 
-  group('CalculationRequest', () {
+  group('IntegralRequest', () {
     test('should create with required parameters', () {
-      final request = CalculationRequest(expr: 'sin(x)', arg: 'x');
+      final request = IntegralRequest(expr: 'sin(x)', arg: 'x');
 
       expect(request.expr, equals('sin(x)'));
       expect(request.arg, equals('x'));
-      expect(request.token, equals('98ae9979efca566d'));
+      expect(request.endpoint, equals('/int/calculate.php'));
     });
 
-    test('toMap should return correct map', () {
-      final request = CalculationRequest(expr: 'sin(x)', arg: 'x');
+    test('toMap should include token', () {
+      final request = IntegralRequest(expr: 'sin(x)', arg: 'x');
 
-      final map = request.toMap();
+      final map = request.toMap('test_token');
 
       expect(map['expr'], equals('sin(x)'));
       expect(map['arg'], equals('x'));
+      expect(map['token'], equals('test_token'));
     });
 
-    test('toJson should return valid JSON string', () {
-      final request = CalculationRequest(expr: 'sin(x)', arg: 'x');
+    test('toJson should return valid JSON with token', () {
+      final request = IntegralRequest(expr: 'sin(x)', arg: 'x');
 
-      final json = request.toJson();
+      final json = request.toJson('test_token');
 
       expect(json, contains('"expr":"sin(x)"'));
       expect(json, contains('"arg":"x"'));
+      expect(json, contains('"token":"test_token"'));
+    });
+  });
+
+  group('DerivativeRequest', () {
+    test('should create with correct endpoint', () {
+      final request = DerivativeRequest(expr: 'x^2');
+
+      expect(request.endpoint, equals('/dif/calculate.php'));
+    });
+
+    test('toMap should include all fields', () {
+      final request = DerivativeRequest(expr: 'x^2', arg: 'x');
+
+      final map = request.toMap('token123');
+
+      expect(map['expr'], equals('x^2'));
+      expect(map['token'], equals('token123'));
+      expect(map['params'], equals('simplifyresult=true,implicitresult=false'));
+    });
+  });
+
+  group('EquationRequest', () {
+    test('should create with correct endpoint', () {
+      final request = EquationRequest(expr: 'x^2=4');
+
+      expect(request.endpoint, equals('/equ/calculate.php'));
+    });
+
+    test('toMap should include set parameter', () {
+      final request = EquationRequest(expr: 'x^2=4', set: '0');
+
+      final map = request.toMap('token123');
+
+      expect(map['set'], equals('0'));
+      expect(map['token'], equals('token123'));
+    });
+  });
+
+  group('LimitRequest', () {
+    test('should require to parameter', () {
+      final request = LimitRequest(expr: '1/x', to: 'inf');
+
+      expect(request.endpoint, equals('/lim/calculate.php'));
+      expect(request.to, equals('inf'));
+    });
+  });
+
+  group('OdeRequest', () {
+    test('should create with correct endpoint', () {
+      final request = OdeRequest(expr: "y'=y");
+
+      expect(request.endpoint, equals('/ode/calculate.php'));
+    });
+
+    test('toMap should include func parameter', () {
+      final request = OdeRequest(expr: "y'=y", func: 'y');
+
+      final map = request.toMap('token123');
+
+      expect(map['func'], equals('y'));
+      expect(map['token'], equals('token123'));
+    });
+  });
+
+  group('ComplexRequest', () {
+    test('should create with correct endpoint', () {
+      final request = ComplexRequest(expr: 'conj(1+i)');
+
+      expect(request.endpoint, equals('/com/calculate.php'));
+    });
+
+    test('toMap should not include arg parameter', () {
+      final request = ComplexRequest(expr: 'conj(1+i)');
+
+      final map = request.toMap('token123');
+
+      expect(map.containsKey('arg'), isFalse);
+      expect(map['func'], equals('z=x+i*y'));
     });
   });
 
@@ -77,11 +152,6 @@ void main() {
 
       final result = CalculationResult.fromApiResponse(response);
 
-      print('Result success: ${result.success}');
-      print('Result error: ${result.error}');
-      print('Result originalExpr: ${result.originalExpr}');
-      print('Result resultLatex: ${result.resultLatex}');
-
       expect(result.success, isTrue, reason: 'Error: ${result.error}');
       expect(result.originalExpr, isNotEmpty);
       expect(result.resultLatex, isNotEmpty);
@@ -89,7 +159,6 @@ void main() {
     });
 
     test('should replace placeholders in LaTeX', () {
-      // 使用API实际返回的带占位符的数据
       final response = [
         [
           -2,
@@ -116,14 +185,7 @@ void main() {
 
       final result = CalculationResult.fromApiResponse(response);
 
-      print(
-        'Original with placeholders: \\int{\\002\\left(x\\right)}{\\;\\mathrm{d}x}',
-      );
-      print('Processed originalExpr: ${result.originalExpr}');
-      print('Processed resultLatex: ${result.resultLatex}');
-
       expect(result.success, isTrue);
-      // 验证占位符已被替换
       expect(result.originalExpr, contains('\\sin'));
       expect(result.originalExpr, isNot(contains('\\002')));
       expect(result.resultLatex, contains('\\cos'));
@@ -147,7 +209,7 @@ void main() {
 
     test('should handle malformed response', () {
       final response = [
-        [1, 2], // 缺少必要字段
+        [1, 2],
       ];
 
       final result = CalculationResult.fromApiResponse(response);

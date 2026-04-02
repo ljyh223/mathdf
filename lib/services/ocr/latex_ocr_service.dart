@@ -6,7 +6,6 @@ import 'model_manager.dart';
 import 'image_processor.dart';
 import 'tokenizer.dart';
 
-/// LaTeX OCR 服务
 class LatexOcrService {
   static final LatexOcrService _instance = LatexOcrService._internal();
   factory LatexOcrService() => _instance;
@@ -18,17 +17,12 @@ class LatexOcrService {
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
-  /// 初始化服务
   Future<void> init() async {
     if (_isInitialized) return;
 
     try {
-      // 加载模型
       await _modelManager.init();
-
-      // 加载tokenizer
       await _tokenizer.loadFromAsset('assets/models/tokenizer.json');
-
       _isInitialized = true;
       print('LatexOcrService initialized successfully');
     } catch (e) {
@@ -37,9 +31,6 @@ class LatexOcrService {
     }
   }
 
-  /// 识别图片中的LaTeX公式
-  /// [imageBytes] 图片字节数组
-  /// 返回LaTeX字符串
   Future<String> recognize(Uint8List imageBytes) async {
     if (!_isInitialized) {
       throw StateError('LatexOcrService not initialized. Call init() first.');
@@ -48,33 +39,97 @@ class LatexOcrService {
     final stopwatch = Stopwatch()..start();
 
     try {
-      // 1. 解码图片
       final image = ImageProcessor.decodeImage(imageBytes);
       if (image == null) {
         throw ArgumentError('Failed to decode image');
       }
 
-      // 2. 预处理图片
-      final processed = ImageProcessor.preprocess(image);
-      final (width, height) = ImageProcessor.getProcessedSize(image);
+      final padded = ImageProcessor.pad(image);
+      final inputImage = ImageProcessor.minmaxSize(padded);
+      print(
+        '[OCR] Original: ${image.width}x${image.height}, Padded: ${padded.width}x${padded.height}, InputImage: ${inputImage.width}x${inputImage.height}',
+      );
 
-      // 3. 运行Image Resizer调整尺寸
-      final resized = await _runImageResizer(processed, width, height);
+      double r = 1.0;
+      int w = inputImage.width;
+      int h = inputImage.height;
+      Float32List? finalImg;
+      img.Image? finalPadded;
 
-      // 4. 运行Encoder提取特征
-      final context = await _runEncoder(resized);
+      for (int i = 0; i < 10; i++) {
+        h = (h * r).round();
+        if (h < 1) h = 1;
 
-      // 5. 运行Decoder生成token序列
+        print('[OCR] Iteration $i: r=$r, w=$w, h=$h');
+
+        final (processed, paddedImg) = ImageProcessor.preProcess(
+          inputImage,
+          r,
+          w,
+          h,
+        );
+
+        print(
+          '[OCR] Iteration $i: r=$r, w=$w, h=$h, processed.length=${processed.length}, paddedImg=${paddedImg.width}x${paddedImg.height}',
+        );
+
+        final inputShape = [1, 1, h, w];
+        final input = await OrtValue.fromList(processed, inputShape);
+        final output = await _modelManager.runImageResizer(input);
+        await input.dispose();
+
+        if (output == null) {
+          finalImg = processed;
+          finalPadded = paddedImg;
+          break;
+        }
+
+        final outputList = await output.asFlattenedList();
+        await output.dispose();
+
+        int maxIdx = 0;
+        double maxVal = outputList[0].toDouble();
+        for (int j = 1; j < outputList.length; j++) {
+          final val = outputList[j].toDouble();
+          if (val > maxVal) {
+            maxVal = val;
+            maxIdx = j;
+          }
+        }
+
+        final newW = (maxIdx + 1) * 32;
+        finalImg = processed;
+        finalPadded = paddedImg;
+
+        print(
+          '[OCR] maxIdx=$maxIdx, newW=$newW, paddedImg.width=${paddedImg.width}',
+        );
+
+        if (newW == paddedImg.width) break;
+
+        r = newW / paddedImg.width;
+        w = newW;
+      }
+
+      if (finalImg == null || finalPadded == null) {
+        final (processed, paddedImg) = ImageProcessor.preProcess(
+          inputImage,
+          1.0,
+          inputImage.width,
+          inputImage.height,
+        );
+        finalImg = processed;
+        finalPadded = paddedImg;
+        w = finalPadded.width;
+        h = finalPadded.height;
+      }
+
+      final context = await _runEncoder(finalImg!, w, h);
       final tokens = await _runDecoder(context);
-
-      // 6. 解码token为字符串
       final results = _tokenizer.tokensToStrings(tokens);
       final latex = results.isNotEmpty ? results[0] : '';
-
-      // 7. 后处理
       final result = _postProcess(latex);
 
-      // 清理context
       context.dispose();
 
       stopwatch.stop();
@@ -87,75 +142,11 @@ class LatexOcrService {
     }
   }
 
-  /// 运行Image Resizer
-  Future<Float32List> _runImageResizer(
-    Float32List imageData,
-    int width,
-    int height,
-  ) async {
-    // Image Resizer循环
-    int w = width;
-    int h = height;
-    double r = 1.0;
-    Float32List finalImage = imageData;
-
-    for (int i = 0; i < 10; i++) {
-      h = (h * r).toInt();
-
-      // 确保尺寸有效
-      if (h < 1 || w < 1) break;
-
-      // 创建ONNX输入
-      final inputShape = [1, 1, h, w];
-      final input = await OrtValue.fromList(finalImage, inputShape);
-
-      // 运行resizer
-      final output = await _modelManager.runImageResizer(input);
-
-      // 清理
-      await input.dispose();
-
-      if (output == null) break;
-
-      // 获取输出并计算新宽度
-      final outputList = await output.asFlattenedList();
-      await output.dispose();
-
-      // 找到最大概率的索引
-      int maxIdx = 0;
-      double maxVal = outputList[0].toDouble();
-      for (int j = 1; j < outputList.length; j++) {
-        final val = outputList[j].toDouble();
-        if (val > maxVal) {
-          maxVal = val;
-          maxIdx = j;
-        }
-      }
-
-      final newW = (maxIdx + 1) * 32;
-      if (newW == w) break;
-
-      r = newW / w;
-      w = newW;
-    }
-
-    return finalImage;
-  }
-
-  /// 运行Encoder
-  Future<OrtValue> _runEncoder(Float32List imageData) async {
-    // 获取图片尺寸
-    final length = imageData.length;
-    final h = (length / 672).ceil();
-
-    // 创建ONNX输入
-    final inputShape = [1, 1, h, 672];
+  Future<OrtValue> _runEncoder(Float32List imageData, int w, int h) async {
+    final inputShape = [1, 1, h, w];
     final input = await OrtValue.fromList(imageData, inputShape);
 
-    // 运行encoder
     final output = await _modelManager.runEncoder(input);
-
-    // 清理输入
     await input.dispose();
 
     if (output == null) {
@@ -165,41 +156,35 @@ class LatexOcrService {
     return output;
   }
 
-  /// 运行Decoder
   Future<List<int>> _runDecoder(OrtValue context) async {
     final tokens = <int>[ModelConfig.bosToken];
     final mask = <bool>[true];
 
     for (int step = 0; step < ModelConfig.maxSeqLen; step++) {
-      // 取最近512个token
       final startIdx = tokens.length > 512 ? tokens.length - 512 : 0;
       final currentTokens = tokens.sublist(startIdx);
       final currentMask = mask.sublist(startIdx);
 
-      // 创建ONNX输入
       final tokensInput = await OrtValue.fromList(
         Int64List.fromList(currentTokens),
         [1, currentTokens.length],
       );
-      final maskInput = await OrtValue.fromList(
-        Uint8List.fromList(currentMask.map((e) => e ? 1 : 0).toList()),
-        [1, currentMask.length],
-      );
+      final maskInput = await OrtValue.fromList(List<bool>.from(currentMask), [
+        1,
+        currentMask.length,
+      ]);
 
-      // 运行decoder
       final output = await _modelManager.runDecoder(
         tokens: tokensInput,
         mask: maskInput,
         context: context,
       );
 
-      // 清理输入
       await tokensInput.dispose();
       await maskInput.dispose();
 
       if (output == null) break;
 
-      // 获取logits
       final logitsList = await output.asFlattenedList();
       await output.dispose();
 
@@ -207,48 +192,33 @@ class LatexOcrService {
           .map<double>((e) => (e as num).toDouble())
           .toList();
 
-      // 获取最后一个位置的logits
       final vocabSize = logits.length ~/ currentTokens.length;
       final lastLogits = logits.sublist(
         (currentTokens.length - 1) * vocabSize,
         currentTokens.length * vocabSize,
       );
 
-      // Top-k filtering
       final filtered = _topK(lastLogits, threshold: 0.9);
-
-      // Softmax with temperature
       final probs = _softmax(filtered, ModelConfig.temperature);
-
-      // 采样
       final sample = _multinomial(probs);
 
-      // 追加
       tokens.add(sample);
       mask.add(true);
 
-      // 检查EOS
       if (sample == ModelConfig.eosToken) {
         break;
       }
     }
 
-    // 移除BOS token
     return tokens.sublist(1);
   }
 
-  /// Top-k filtering
   List<double> _topK(List<double> logits, {double threshold = 0.9}) {
-    final k = ((1 - threshold) * logits.length).toInt();
-
-    // 创建副本
+    final k = ((1 - threshold) * logits.length).toInt().clamp(1, logits.length);
     final result = List<double>.from(logits);
-
-    // 找到第k大的值
     final sorted = List<double>.from(logits)..sort((a, b) => b.compareTo(a));
-    final cutoff = sorted[k.clamp(0, sorted.length - 1)];
+    final cutoff = sorted[k - 1];
 
-    // 将小于cutoff的值设为负无穷
     for (int i = 0; i < result.length; i++) {
       if (result[i] < cutoff) {
         result[i] = double.negativeInfinity;
@@ -258,29 +228,24 @@ class LatexOcrService {
     return result;
   }
 
-  /// Softmax with temperature
   List<double> _softmax(List<double> logits, double temperature) {
-    // 除以temperature
     final scaled = logits.map((x) => x / temperature).toList();
 
-    // 找最大值（数值稳定性）
     double maxVal = scaled[0];
     for (final val in scaled) {
       if (val > maxVal) maxVal = val;
     }
 
-    // 计算exp
     double sum = 0;
     final exp = List<double>.filled(scaled.length, 0);
     for (int i = 0; i < scaled.length; i++) {
       if (scaled[i] != double.negativeInfinity) {
         exp[i] = scaled[i] - maxVal;
-        exp[i] = exp[i] > -700 ? math.exp(exp[i]) : 0; // 防止下溢
+        exp[i] = exp[i] > -700 ? math.exp(exp[i]) : 0;
       }
       sum += exp[i];
     }
 
-    // 归一化
     if (sum > 0) {
       for (int i = 0; i < exp.length; i++) {
         exp[i] /= sum;
@@ -290,7 +255,6 @@ class LatexOcrService {
     return exp;
   }
 
-  /// Multinomial sampling
   int _multinomial(List<double> probs) {
     final random = math.Random();
     final r = random.nextDouble();
@@ -306,22 +270,11 @@ class LatexOcrService {
     return probs.length - 1;
   }
 
-  /// 后处理：移除多余空格
   String _postProcess(String latex) {
-    // 参考Python实现的后处理
-    final textReg = RegExp(
-      r'(\\(operatorname|mathrm|text|mathbf)\s?\*? {.*?})',
-    );
-
-    var result = latex;
-
-    // 移除多余空格
-    result = result.replaceAll(RegExp(r'\s+'), ' ').trim();
-
+    var result = latex.replaceAll(RegExp(r'\s+'), ' ').trim();
     return result;
   }
 
-  /// 释放资源
   Future<void> dispose() async {
     await _modelManager.dispose();
     _isInitialized = false;

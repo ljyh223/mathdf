@@ -27,25 +27,37 @@ class ResultDisplay extends StatelessWidget {
 
         if (provider.error != null) {
           return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.error_outline, size: 64, color: Colors.red.shade400),
-                const SizedBox(height: 16),
-                Text('计算出错', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 8),
-                Text(
-                  provider.error!,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.red.shade700),
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.error_outline,
+                      size: 64,
+                      color: Colors.red.shade400,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      '计算出错',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      provider.error!,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.red.shade700),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      onPressed: () => provider.calculate(),
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('重试'),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 16),
-                ElevatedButton.icon(
-                  onPressed: () => provider.calculate(),
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('重试'),
-                ),
-              ],
+              ),
             ),
           );
         }

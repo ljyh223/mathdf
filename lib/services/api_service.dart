@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:mathdf/models/calculation_requests.dart';
+import 'package:mathdf/models/api_requests.dart';
 import 'package:mathdf/models/calculation_result.dart';
 import 'package:mathdf/models/calculation_type.dart';
 import 'package:mathdf/services/encryption_service.dart';
@@ -13,25 +13,22 @@ class ApiService {
 
   Dio get _dio => _authService.dio;
 
-  Future<CalculationResult> _sendRequest({
-    required String jsonData,
-    required String endpoint,
-  }) async {
+  Future<CalculationResult> _sendRequest(ApiRequest request) async {
     try {
       await _authService.ensureAuthReady();
 
       final token = _authService.token;
-      final jsonDataWithToken = _injectToken(jsonData, token);
+      final jsonData = request.toJson(token);
 
       final encrypted = EncryptionService.encryptAndEncode(
-        jsonDataWithToken,
+        jsonData,
         '${token}a',
       );
       print("encrypted: $encrypted");
-      print("jsonDataWithToken: $jsonDataWithToken");
+      print("jsonData: $jsonData");
 
       final response = await _dio.post(
-        endpoint,
+        request.endpoint,
         data: {'p': encrypted, 'f': 'false'},
         options: Options(contentType: Headers.formUrlEncodedContentType),
       );
@@ -47,13 +44,25 @@ class ApiService {
           try {
             final jsonData = jsonDecode(responseData);
             if (jsonData is List) {
-              return CalculationResult.fromApiResponse(jsonData);
+              final result = CalculationResult.fromApiResponse(jsonData);
+              if (result.success &&
+                  result.steps.isEmpty &&
+                  result.resultLatex.isEmpty) {
+                return CalculationResult.error('计算结果为空');
+              }
+              return result;
             }
           } catch (e) {
             return CalculationResult.error('解析响应失败: $e');
           }
         } else if (responseData is List) {
-          return CalculationResult.fromApiResponse(responseData);
+          final result = CalculationResult.fromApiResponse(responseData);
+          if (result.success &&
+              result.steps.isEmpty &&
+              result.resultLatex.isEmpty) {
+            return CalculationResult.error('计算结果为空');
+          }
+          return result;
         }
 
         return CalculationResult.error('响应格式不正确');
@@ -89,12 +98,6 @@ class ApiService {
     }
   }
 
-  String _injectToken(String jsonData, String token) {
-    final map = jsonDecode(jsonData) as Map<String, dynamic>;
-    map['token'] = token;
-    return jsonEncode(map).replaceAll(' ', '');
-  }
-
   Future<CalculationResult> calculateIntegral({
     required String expression,
     String variable = 'x',
@@ -107,10 +110,7 @@ class ApiService {
       bottom: lowerLimit ?? '',
       top: upperLimit ?? '',
     );
-    return _sendRequest(
-      jsonData: request.toJson(),
-      endpoint: CalculationType.integral.endpoint,
-    );
+    return _sendRequest(request);
   }
 
   Future<CalculationResult> calculateDerivative({
@@ -118,10 +118,7 @@ class ApiService {
     String variable = 'x',
   }) async {
     final request = DerivativeRequest(expr: expression, arg: variable);
-    return _sendRequest(
-      jsonData: request.toJson(),
-      endpoint: CalculationType.derivative.endpoint,
-    );
+    return _sendRequest(request);
   }
 
   Future<CalculationResult> calculateLimit({
@@ -136,10 +133,7 @@ class ApiService {
       to: to,
       params: 'usehopital=$useHospital',
     );
-    return _sendRequest(
-      jsonData: request.toJson(),
-      endpoint: CalculationType.limit.endpoint,
-    );
+    return _sendRequest(request);
   }
 
   Future<CalculationResult> calculateEquation({
@@ -147,10 +141,7 @@ class ApiService {
     String variable = 'x',
   }) async {
     final request = EquationRequest(expr: expression, arg: variable);
-    return _sendRequest(
-      jsonData: request.toJson(),
-      endpoint: CalculationType.equation.endpoint,
-    );
+    return _sendRequest(request);
   }
 
   Future<CalculationResult> calculateODE({
@@ -159,20 +150,14 @@ class ApiService {
     String variable = 'x',
   }) async {
     final request = OdeRequest(expr: expression, arg: variable, func: func);
-    return _sendRequest(
-      jsonData: request.toJson(),
-      endpoint: CalculationType.ode.endpoint,
-    );
+    return _sendRequest(request);
   }
 
   Future<CalculationResult> calculateComplex({
     required String expression,
   }) async {
     final request = ComplexRequest(expr: expression);
-    return _sendRequest(
-      jsonData: request.toJson(),
-      endpoint: CalculationType.complex.endpoint,
-    );
+    return _sendRequest(request);
   }
 
   Future<CalculationResult> calculate({

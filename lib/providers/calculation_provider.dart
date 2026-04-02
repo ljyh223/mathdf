@@ -5,11 +5,14 @@ import 'package:mathdf/models/calculation_result.dart';
 import 'package:mathdf/services/api_service.dart';
 import 'package:mathdf/services/dynamic_auth_service.dart';
 import 'package:mathdf/services/ocr/latex_ocr_service.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 
 class CalculationProvider with ChangeNotifier {
   final DynamicAuthService _authService = DynamicAuthService();
   late final ApiService _apiService;
   final LatexOcrService _ocrService = LatexOcrService();
+  final ImagePicker _imagePicker = ImagePicker();
 
   CalculationProvider() {
     _apiService = ApiService(_authService);
@@ -31,7 +34,7 @@ class CalculationProvider with ChangeNotifier {
   String _lowerLimit = '';
   String _upperLimit = '';
   String? _additionalParam;
-  String? _limitTo; // 极限趋向值
+  String? _limitTo;
 
   CalculationResult? _result;
   bool _isLoading = false;
@@ -54,13 +57,8 @@ class CalculationProvider with ChangeNotifier {
   String? get error => _error;
   bool get ocrInitialized => _ocrInitialized;
 
-  // 是否显示积分上下限输入
   bool get showIntegralLimits => _selectedType == CalculationType.integral;
-
-  // 是否显示极限点输入
   bool get showLimitPoint => _selectedType == CalculationType.limit;
-
-  // 是否显示变量输入
   bool get showVariableInput => _selectedType != CalculationType.calculator;
 
   // Actions
@@ -154,7 +152,6 @@ class CalculationProvider with ChangeNotifier {
     }
   }
 
-  // 快捷方法
   Future<void> calculateIntegral() async {
     _selectedType = CalculationType.integral;
     await calculate();
@@ -195,9 +192,7 @@ class CalculationProvider with ChangeNotifier {
     await calculate();
   }
 
-  // OCR相关方法
-
-  /// 初始化OCR服务
+  // OCR methods
   Future<void> initOcr() async {
     if (_ocrInitialized) return;
 
@@ -210,8 +205,7 @@ class CalculationProvider with ChangeNotifier {
     }
   }
 
-  /// 从图片识别LaTeX公式
-  Future<void> recognizeFromImage(List<int> imageBytes) async {
+  Future<void> pickFromCamera() async {
     if (!_ocrInitialized) {
       await initOcr();
     }
@@ -221,7 +215,92 @@ class CalculationProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final latex = await _ocrService.recognize(Uint8List.fromList(imageBytes));
+      final XFile? image = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 80,
+      );
+
+      if (image != null) {
+        final bytes = await image.readAsBytes();
+        await _recognizeImage(bytes);
+      } else {
+        _isOcrLoading = false;
+        notifyListeners();
+      }
+    } catch (e) {
+      _error = '拍照识别失败: $e';
+      _isOcrLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> pickFromGallery() async {
+    if (!_ocrInitialized) {
+      await initOcr();
+    }
+
+    _isOcrLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final XFile? image = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 80,
+      );
+
+      if (image != null) {
+        final bytes = await image.readAsBytes();
+        await _recognizeImage(bytes);
+      } else {
+        _isOcrLoading = false;
+        notifyListeners();
+      }
+    } catch (e) {
+      _error = '相册选择失败: $e';
+      _isOcrLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> pickFromFile() async {
+    if (!_ocrInitialized) {
+      await initOcr();
+    }
+
+    _isOcrLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+      );
+
+      if (result != null && result.files.isNotEmpty) {
+        final file = result.files.first;
+        if (file.path != null) {
+          final xfile = file.xFile;
+          if (xfile != null) {
+            final bytes = await xfile.readAsBytes();
+            await _recognizeImage(bytes);
+          }
+        }
+      } else {
+        _isOcrLoading = false;
+        notifyListeners();
+      }
+    } catch (e) {
+      _error = '文件选择失败: $e';
+      _isOcrLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _recognizeImage(Uint8List imageBytes) async {
+    try {
+      final latex = await _ocrService.recognize(imageBytes);
 
       if (latex.isNotEmpty) {
         _expression = latex;

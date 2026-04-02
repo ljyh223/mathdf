@@ -1,6 +1,6 @@
-import 'dart:typed_data';
+import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:mathdf/models/calculation_type.dart';
 import 'package:mathdf/providers/calculation_provider.dart';
@@ -33,7 +33,6 @@ class _InputFormState extends State<InputForm> {
     );
     _limitToController = TextEditingController(text: provider.limitTo ?? '');
 
-    // 初始化OCR服务
     WidgetsBinding.instance.addPostFrameCallback((_) {
       provider.initOcr();
     });
@@ -50,11 +49,12 @@ class _InputFormState extends State<InputForm> {
     super.dispose();
   }
 
+  bool get isMobile => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
   @override
   Widget build(BuildContext context) {
     return Consumer<CalculationProvider>(
       builder: (context, provider, child) {
-        // 类型变化时更新控制器
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_varController.text != provider.variable) {
             _varController.text = provider.variable;
@@ -69,7 +69,6 @@ class _InputFormState extends State<InputForm> {
           if (_paramController.text != param) {
             _paramController.text = param;
           }
-          // 同步表达式（来自OCR）
           if (_exprController.text != provider.expression) {
             _exprController.text = provider.expression;
           }
@@ -81,11 +80,9 @@ class _InputFormState extends State<InputForm> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // 计算类型选择
                 _buildTypeSelector(context, provider),
                 const SizedBox(height: 16),
 
-                // 表达式输入
                 TextField(
                   decoration: InputDecoration(
                     labelText: '表达式',
@@ -95,7 +92,6 @@ class _InputFormState extends State<InputForm> {
                     suffixIcon: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // OCR按钮
                         IconButton(
                           icon: provider.isOcrLoading
                               ? const SizedBox(
@@ -111,7 +107,6 @@ class _InputFormState extends State<InputForm> {
                               : () => _showOcrDialog(context, provider),
                           tooltip: 'OCR识别',
                         ),
-                        // 清除按钮
                         IconButton(
                           icon: const Icon(Icons.clear),
                           onPressed: () {
@@ -129,7 +124,6 @@ class _InputFormState extends State<InputForm> {
                 ),
                 const SizedBox(height: 16),
 
-                // 变量输入
                 if (provider.showVariableInput) ...[
                   TextField(
                     decoration: const InputDecoration(
@@ -144,7 +138,6 @@ class _InputFormState extends State<InputForm> {
                   const SizedBox(height: 16),
                 ],
 
-                // 积分上下限输入
                 if (provider.showIntegralLimits) ...[
                   Row(
                     children: [
@@ -176,7 +169,6 @@ class _InputFormState extends State<InputForm> {
                   const SizedBox(height: 16),
                 ],
 
-                // 极限点输入
                 if (provider.showLimitPoint) ...[
                   Row(
                     children: [
@@ -209,7 +201,6 @@ class _InputFormState extends State<InputForm> {
                   const SizedBox(height: 16),
                 ],
 
-                // 计算按钮
                 ElevatedButton.icon(
                   onPressed: provider.isLoading
                       ? null
@@ -227,7 +218,6 @@ class _InputFormState extends State<InputForm> {
                   ),
                 ),
 
-                // 错误提示
                 if (provider.error != null) ...[
                   const SizedBox(height: 16),
                   Container(
@@ -289,8 +279,9 @@ class _InputFormState extends State<InputForm> {
     );
   }
 
-  /// 显示OCR对话框
   void _showOcrDialog(BuildContext context, CalculationProvider provider) {
+    final isMobilePlatform = isMobile;
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -302,25 +293,33 @@ class _InputFormState extends State<InputForm> {
             const Text('选择识别方式：'),
             const SizedBox(height: 16),
 
-            // 从剪贴板粘贴图片
-            ListTile(
-              leading: const Icon(Icons.paste),
-              title: const Text('从剪贴板粘贴图片'),
-              onTap: () {
-                Navigator.pop(context);
-                _pasteFromClipboard(provider);
-              },
-            ),
-
-            // 从文件选择
-            ListTile(
-              leading: const Icon(Icons.folder),
-              title: const Text('从文件选择'),
-              onTap: () {
-                Navigator.pop(context);
-                _selectFromFile(provider);
-              },
-            ),
+            if (isMobilePlatform) ...[
+              ListTile(
+                leading: const Icon(Icons.camera_alt),
+                title: const Text('拍照识别'),
+                onTap: () {
+                  Navigator.pop(context);
+                  provider.pickFromCamera();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library),
+                title: const Text('从相册选择'),
+                onTap: () {
+                  Navigator.pop(context);
+                  provider.pickFromGallery();
+                },
+              ),
+            ] else ...[
+              ListTile(
+                leading: const Icon(Icons.folder),
+                title: const Text('选择文件'),
+                onTap: () {
+                  Navigator.pop(context);
+                  provider.pickFromFile();
+                },
+              ),
+            ],
           ],
         ),
         actions: [
@@ -331,82 +330,5 @@ class _InputFormState extends State<InputForm> {
         ],
       ),
     );
-  }
-
-  /// 从剪贴板粘贴图片
-  Future<void> _pasteFromClipboard(CalculationProvider provider) async {
-    try {
-      final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
-      if (clipboardData?.text != null) {
-        // 检查是否是base64编码的图片
-        final text = clipboardData!.text!;
-        if (text.startsWith('data:image')) {
-          // 解析base64
-          final base64Str = text.split(',')[1];
-          final bytes = base64Decode(base64Str);
-          await provider.recognizeFromImage(bytes);
-        } else {
-          // 尝试作为文件路径
-          _showSnackBar('请粘贴图片数据或使用文件选择');
-        }
-      } else {
-        _showSnackBar('剪贴板为空');
-      }
-    } catch (e) {
-      _showSnackBar('粘贴失败: $e');
-    }
-  }
-
-  /// 从文件选择（简化版本，显示输入对话框）
-  Future<void> _selectFromFile(CalculationProvider provider) async {
-    final controller = TextEditingController();
-
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('输入图片路径'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: '/path/to/image.png',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('确定'),
-          ),
-        ],
-      ),
-    );
-
-    controller.dispose();
-
-    if (result != null && result.isNotEmpty) {
-      try {
-        final file = await rootBundle.load(result);
-        await provider.recognizeFromImage(file.buffer.asUint8List());
-      } catch (e) {
-        _showSnackBar('加载图片失败: $e');
-      }
-    }
-  }
-
-  void _showSnackBar(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  // Base64解码
-  Uint8List base64Decode(String str) {
-    // 简化的base64解码实现
-    // 实际应该使用dart:convert的base64Decode
-    return Uint8List(0);
   }
 }
