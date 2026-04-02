@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mathdf/services/api_service.dart';
+import 'package:mathdf/services/dynamic_auth_service.dart';
 import 'package:mathdf/services/encryption_service.dart';
 import 'package:mathdf/models/calculation_type.dart';
 import 'package:mathdf/models/calculation_result.dart';
@@ -7,9 +8,11 @@ import 'package:mathdf/models/calculation_result.dart';
 void main() {
   group('API Integration Tests', () {
     late ApiService apiService;
+    late DynamicAuthService authService;
 
     setUp(() {
-      apiService = ApiService();
+      authService = DynamicAuthService();
+      apiService = ApiService(authService);
     });
 
     group('EncryptionService', () {
@@ -54,9 +57,9 @@ void main() {
       test(
         'should successfully call derivative API',
         () async {
-          final result = await apiService.calculate(
-            type: CalculationType.derivative,
-            expression: 'x^2',
+          // 使用与api.md相同的复杂表达式
+          final result = await apiService.calculateDerivative(
+            expression: '(1/2)*(cos(x)^2)',
           );
 
           print('Derivative result: ${result.toString()}');
@@ -69,9 +72,9 @@ void main() {
       test(
         'should successfully call equation API',
         () async {
-          final result = await apiService.calculate(
-            type: CalculationType.equation,
-            expression: 'x^2-4',
+          // 使用api.md中的原始表达式
+          final result = await apiService.calculateEquation(
+            expression: '4*(x^2)+12*x+12/x+4/(x^2)>=47',
           );
 
           print('Equation result: ${result.toString()}');

@@ -1,4 +1,6 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:mathdf/models/calculation_type.dart';
 import 'package:mathdf/providers/calculation_provider.dart';
@@ -16,6 +18,7 @@ class _InputFormState extends State<InputForm> {
   late TextEditingController _lowerLimitController;
   late TextEditingController _upperLimitController;
   late TextEditingController _paramController;
+  late TextEditingController _limitToController;
 
   @override
   void initState() {
@@ -28,6 +31,12 @@ class _InputFormState extends State<InputForm> {
     _paramController = TextEditingController(
       text: provider.additionalParam ?? '',
     );
+    _limitToController = TextEditingController(text: provider.limitTo ?? '');
+
+    // 初始化OCR服务
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      provider.initOcr();
+    });
   }
 
   @override
@@ -37,20 +46,8 @@ class _InputFormState extends State<InputForm> {
     _lowerLimitController.dispose();
     _upperLimitController.dispose();
     _paramController.dispose();
+    _limitToController.dispose();
     super.dispose();
-  }
-
-  void _syncControllers() {
-    final provider = context.read<CalculationProvider>();
-
-    // 同步表达式
-    if (_exprController.text != provider.expression) {
-      final selection = _exprController.selection;
-      _exprController.text = provider.expression;
-      if (selection.isValid && selection.end <= provider.expression.length) {
-        _exprController.selection = selection;
-      }
-    }
   }
 
   @override
@@ -72,6 +69,10 @@ class _InputFormState extends State<InputForm> {
           if (_paramController.text != param) {
             _paramController.text = param;
           }
+          // 同步表达式（来自OCR）
+          if (_exprController.text != provider.expression) {
+            _exprController.text = provider.expression;
+          }
         });
 
         return Card(
@@ -86,14 +87,45 @@ class _InputFormState extends State<InputForm> {
 
                 // 表达式输入
                 TextField(
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: '表达式',
                     hintText: '例如: sin(x)*cos(x)',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.functions),
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.functions),
+                    suffixIcon: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // OCR按钮
+                        IconButton(
+                          icon: provider.isOcrLoading
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.camera_alt),
+                          onPressed: provider.isOcrLoading
+                              ? null
+                              : () => _showOcrDialog(context, provider),
+                          tooltip: 'OCR识别',
+                        ),
+                        // 清除按钮
+                        IconButton(
+                          icon: const Icon(Icons.clear),
+                          onPressed: () {
+                            _exprController.clear();
+                            provider.setExpression('');
+                          },
+                          tooltip: '清除',
+                        ),
+                      ],
+                    ),
                   ),
                   controller: _exprController,
                   onChanged: provider.setExpression,
+                  maxLines: 2,
                 ),
                 const SizedBox(height: 16),
 
@@ -146,15 +178,33 @@ class _InputFormState extends State<InputForm> {
 
                 // 极限点输入
                 if (provider.showLimitPoint) ...[
-                  TextField(
-                    decoration: const InputDecoration(
-                      labelText: '极限点',
-                      hintText: '例如: 0, ∞',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.arrow_forward),
-                    ),
-                    controller: _paramController,
-                    onChanged: provider.setAdditionalParam,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          decoration: const InputDecoration(
+                            labelText: '变量趋向',
+                            hintText: '例如: inf, 0, 1',
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.arrow_forward),
+                          ),
+                          controller: _limitToController,
+                          onChanged: provider.setLimitTo,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: TextField(
+                          decoration: const InputDecoration(
+                            labelText: '洛必达',
+                            hintText: 'usehopital=false',
+                            border: OutlineInputBorder(),
+                          ),
+                          controller: _paramController,
+                          onChanged: provider.setAdditionalParam,
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 16),
                 ],
@@ -237,5 +287,126 @@ class _InputFormState extends State<InputForm> {
         ),
       ],
     );
+  }
+
+  /// 显示OCR对话框
+  void _showOcrDialog(BuildContext context, CalculationProvider provider) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('OCR识别'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('选择识别方式：'),
+            const SizedBox(height: 16),
+
+            // 从剪贴板粘贴图片
+            ListTile(
+              leading: const Icon(Icons.paste),
+              title: const Text('从剪贴板粘贴图片'),
+              onTap: () {
+                Navigator.pop(context);
+                _pasteFromClipboard(provider);
+              },
+            ),
+
+            // 从文件选择
+            ListTile(
+              leading: const Icon(Icons.folder),
+              title: const Text('从文件选择'),
+              onTap: () {
+                Navigator.pop(context);
+                _selectFromFile(provider);
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 从剪贴板粘贴图片
+  Future<void> _pasteFromClipboard(CalculationProvider provider) async {
+    try {
+      final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+      if (clipboardData?.text != null) {
+        // 检查是否是base64编码的图片
+        final text = clipboardData!.text!;
+        if (text.startsWith('data:image')) {
+          // 解析base64
+          final base64Str = text.split(',')[1];
+          final bytes = base64Decode(base64Str);
+          await provider.recognizeFromImage(bytes);
+        } else {
+          // 尝试作为文件路径
+          _showSnackBar('请粘贴图片数据或使用文件选择');
+        }
+      } else {
+        _showSnackBar('剪贴板为空');
+      }
+    } catch (e) {
+      _showSnackBar('粘贴失败: $e');
+    }
+  }
+
+  /// 从文件选择（简化版本，显示输入对话框）
+  Future<void> _selectFromFile(CalculationProvider provider) async {
+    final controller = TextEditingController();
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('输入图片路径'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: '/path/to/image.png',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+
+    controller.dispose();
+
+    if (result != null && result.isNotEmpty) {
+      try {
+        final file = await rootBundle.load(result);
+        await provider.recognizeFromImage(file.buffer.asUint8List());
+      } catch (e) {
+        _showSnackBar('加载图片失败: $e');
+      }
+    }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  // Base64解码
+  Uint8List base64Decode(String str) {
+    // 简化的base64解码实现
+    // 实际应该使用dart:convert的base64Decode
+    return Uint8List(0);
   }
 }

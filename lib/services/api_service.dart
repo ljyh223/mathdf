@@ -1,77 +1,45 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:mathdf/constants/api_constants.dart';
-import 'package:mathdf/models/calculation_request.dart';
+import 'package:mathdf/models/calculation_requests.dart';
 import 'package:mathdf/models/calculation_result.dart';
 import 'package:mathdf/models/calculation_type.dart';
 import 'package:mathdf/services/encryption_service.dart';
+import 'package:mathdf/services/dynamic_auth_service.dart';
 
 class ApiService {
-  late final Dio _dio;
+  final DynamicAuthService _authService;
 
-  ApiService() {
-    _dio = Dio(
-      BaseOptions(
-        baseUrl: ApiConstants.baseUrl,
-        connectTimeout: const Duration(
-          milliseconds: ApiConstants.connectTimeout,
-        ),
-        receiveTimeout: const Duration(
-          milliseconds: ApiConstants.receiveTimeout,
-        ),
-        headers: ApiConstants.headers,
-      ),
-    );
+  ApiService(this._authService);
 
-    // 添加拦截器
-    _dio.interceptors.add(
-      LogInterceptor(
-        requestBody: true,
-        responseBody: true,
-        logPrint: (obj) => print(obj),
-      ),
-    );
-  }
+  Dio get _dio => _authService.dio;
 
-  /// 发送计算请求
-  Future<CalculationResult> calculate({
-    required CalculationType type,
-    required String expression,
-    String variable = 'x',
-    String? lowerLimit,
-    String? upperLimit,
-    String? additionalParam,
+  Future<CalculationResult> _sendRequest({
+    required String jsonData,
+    required String endpoint,
   }) async {
     try {
-      // 创建请求对象
-      final request = CalculationRequest(
-        expr: expression,
-        arg: variable,
-        def: additionalParam ?? '0',
-        bottom: lowerLimit ?? '',
-        top: upperLimit ?? '',
-      );
+      await _authService.ensureAuthReady();
 
-      // 加密请求数据
-      final requestData = request.toJson();
+      final token = _authService.token;
+      final jsonDataWithToken = _injectToken(jsonData, token);
+
       final encrypted = EncryptionService.encryptAndEncode(
-        requestData,
-        '${ApiConstants.token}a',
+        jsonDataWithToken,
+        '${token}a',
+      );
+      print("encrypted: $encrypted");
+      print("jsonDataWithToken: $jsonDataWithToken");
+
+      final response = await _dio.post(
+        endpoint,
+        data: {'p': encrypted, 'f': 'false'},
+        options: Options(contentType: Headers.formUrlEncodedContentType),
       );
 
-      // 创建表单数据
-      final formData = FormData.fromMap({'p': encrypted, 'f': 'false'});
-
-      // 发送请求
-      final response = await _dio.post(type.endpoint, data: formData);
-
-      // 解析响应
       if (response.statusCode == 200) {
         final responseData = response.data;
 
-        // 如果响应是字符串，需要解析为JSON
         if (responseData is String) {
-          // 检查是否是错误响应
           if (responseData == 'ERROR' || responseData.isEmpty) {
             return CalculationResult.error('API返回错误: $responseData');
           }
@@ -121,102 +89,125 @@ class ApiService {
     }
   }
 
-  /// 计算积分
+  String _injectToken(String jsonData, String token) {
+    final map = jsonDecode(jsonData) as Map<String, dynamic>;
+    map['token'] = token;
+    return jsonEncode(map).replaceAll(' ', '');
+  }
+
   Future<CalculationResult> calculateIntegral({
     required String expression,
     String variable = 'x',
     String? lowerLimit,
     String? upperLimit,
   }) async {
-    return calculate(
-      type: CalculationType.integral,
-      expression: expression,
-      variable: variable,
-      lowerLimit: lowerLimit,
-      upperLimit: upperLimit,
+    final request = IntegralRequest(
+      expr: expression,
+      arg: variable,
+      bottom: lowerLimit ?? '',
+      top: upperLimit ?? '',
+    );
+    return _sendRequest(
+      jsonData: request.toJson(),
+      endpoint: CalculationType.integral.endpoint,
     );
   }
 
-  /// 计算方程
-  Future<CalculationResult> calculateEquation({
-    required String expression,
-    String variable = 'x',
-  }) async {
-    return calculate(
-      type: CalculationType.equation,
-      expression: expression,
-      variable: variable,
-    );
-  }
-
-  /// 计算极限
-  Future<CalculationResult> calculateLimit({
-    required String expression,
-    String variable = 'x',
-    String? limitPoint,
-  }) async {
-    return calculate(
-      type: CalculationType.limit,
-      expression: expression,
-      variable: variable,
-      additionalParam: limitPoint,
-    );
-  }
-
-  /// 计算导数
   Future<CalculationResult> calculateDerivative({
     required String expression,
     String variable = 'x',
   }) async {
-    return calculate(
-      type: CalculationType.derivative,
-      expression: expression,
-      variable: variable,
+    final request = DerivativeRequest(expr: expression, arg: variable);
+    return _sendRequest(
+      jsonData: request.toJson(),
+      endpoint: CalculationType.derivative.endpoint,
     );
   }
 
-  /// 计算微分方程
-  Future<CalculationResult> calculateODE({
+  Future<CalculationResult> calculateLimit({
+    required String expression,
+    String variable = 'x',
+    required String to,
+    bool useHospital = false,
+  }) async {
+    final request = LimitRequest(
+      expr: expression,
+      arg: variable,
+      to: to,
+      params: 'usehopital=$useHospital',
+    );
+    return _sendRequest(
+      jsonData: request.toJson(),
+      endpoint: CalculationType.limit.endpoint,
+    );
+  }
+
+  Future<CalculationResult> calculateEquation({
     required String expression,
     String variable = 'x',
   }) async {
-    return calculate(
-      type: CalculationType.ode,
-      expression: expression,
-      variable: variable,
+    final request = EquationRequest(expr: expression, arg: variable);
+    return _sendRequest(
+      jsonData: request.toJson(),
+      endpoint: CalculationType.equation.endpoint,
     );
   }
 
-  /// 计算复数
+  Future<CalculationResult> calculateODE({
+    required String expression,
+    String func = 'y',
+    String variable = 'x',
+  }) async {
+    final request = OdeRequest(expr: expression, arg: variable, func: func);
+    return _sendRequest(
+      jsonData: request.toJson(),
+      endpoint: CalculationType.ode.endpoint,
+    );
+  }
+
   Future<CalculationResult> calculateComplex({
     required String expression,
-    String variable = 'z',
   }) async {
-    return calculate(
-      type: CalculationType.complex,
-      expression: expression,
-      variable: variable,
+    final request = ComplexRequest(expr: expression);
+    return _sendRequest(
+      jsonData: request.toJson(),
+      endpoint: CalculationType.complex.endpoint,
     );
   }
 
-  /// 基础计算
-  Future<CalculationResult> calculateBasic({required String expression}) async {
-    return calculate(
-      type: CalculationType.calculator,
-      expression: expression,
-      variable: '',
-    );
-  }
-
-  /// 矩阵计算
-  Future<CalculationResult> calculateMatrix({
+  Future<CalculationResult> calculate({
+    required CalculationType type,
     required String expression,
-    String variable = 'A',
+    String variable = 'x',
+    String? lowerLimit,
+    String? upperLimit,
+    String? additionalParam,
+    String? to,
   }) async {
-    return calculate(
-      type: CalculationType.matrix,
-      expression: expression,
-      variable: variable,
-    );
+    switch (type) {
+      case CalculationType.integral:
+        return calculateIntegral(
+          expression: expression,
+          variable: variable,
+          lowerLimit: lowerLimit,
+          upperLimit: upperLimit,
+        );
+      case CalculationType.derivative:
+        return calculateDerivative(expression: expression, variable: variable);
+      case CalculationType.limit:
+        return calculateLimit(
+          expression: expression,
+          variable: variable,
+          to: to ?? additionalParam ?? 'inf',
+        );
+      case CalculationType.equation:
+        return calculateEquation(expression: expression, variable: variable);
+      case CalculationType.ode:
+        return calculateODE(expression: expression, variable: variable);
+      case CalculationType.complex:
+        return calculateComplex(expression: expression);
+      default:
+        return calculateIntegral(expression: expression, variable: variable);
+    }
   }
 }

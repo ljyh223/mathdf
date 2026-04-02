@@ -1,16 +1,15 @@
 enum CalculationType {
-  integral, // 积分
-  equation, // 方程
-  limit, // 极限
-  derivative, // 导数
-  ode, // 微分方程
-  complex, // 复数
-  calculator, // 基础计算
-  matrix, // 矩阵
+  integral,
+  equation,
+  limit,
+  derivative,
+  ode,
+  complex,
+  calculator,
+  matrix,
 }
 
 extension CalculationTypeExtension on CalculationType {
-  /// 获取显示名称
   String get displayName {
     switch (this) {
       case CalculationType.integral:
@@ -32,7 +31,6 @@ extension CalculationTypeExtension on CalculationType {
     }
   }
 
-  /// 获取英文名称
   String get englishName {
     switch (this) {
       case CalculationType.integral:
@@ -54,29 +52,6 @@ extension CalculationTypeExtension on CalculationType {
     }
   }
 
-  /// 获取API端点
-  String get endpoint {
-    switch (this) {
-      case CalculationType.integral:
-        return '/int/calculate.php';
-      case CalculationType.equation:
-        return '/equ/calculate.php';
-      case CalculationType.limit:
-        return '/lim/calculate.php';
-      case CalculationType.derivative:
-        return '/dif/calculate.php';
-      case CalculationType.ode:
-        return '/ode/calculate.php';
-      case CalculationType.complex:
-        return '/com/calculate.php';
-      case CalculationType.calculator:
-        return '/calc/calculate.php';
-      case CalculationType.matrix:
-        return '/mat/calculate.php';
-    }
-  }
-
-  /// 获取图标
   String get icon {
     switch (this) {
       case CalculationType.integral:

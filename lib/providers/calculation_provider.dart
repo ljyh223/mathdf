@@ -1,10 +1,28 @@
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:mathdf/models/calculation_type.dart';
 import 'package:mathdf/models/calculation_result.dart';
 import 'package:mathdf/services/api_service.dart';
+import 'package:mathdf/services/dynamic_auth_service.dart';
+import 'package:mathdf/services/ocr/latex_ocr_service.dart';
 
 class CalculationProvider with ChangeNotifier {
-  final ApiService _apiService = ApiService();
+  final DynamicAuthService _authService = DynamicAuthService();
+  late final ApiService _apiService;
+  final LatexOcrService _ocrService = LatexOcrService();
+
+  CalculationProvider() {
+    _apiService = ApiService(_authService);
+    _initializeAuth();
+  }
+
+  Future<void> _initializeAuth() async {
+    try {
+      await _authService.ensureAuthReady();
+    } catch (e) {
+      print('[CalculationProvider] Failed to initialize auth: $e');
+    }
+  }
 
   // 状态
   CalculationType _selectedType = CalculationType.integral;
@@ -13,10 +31,14 @@ class CalculationProvider with ChangeNotifier {
   String _lowerLimit = '';
   String _upperLimit = '';
   String? _additionalParam;
+  String? _limitTo; // 极限趋向值
 
   CalculationResult? _result;
   bool _isLoading = false;
+  bool _isOcrLoading = false;
   String? _error;
+
+  bool _ocrInitialized = false;
 
   // Getters
   CalculationType get selectedType => _selectedType;
@@ -25,9 +47,12 @@ class CalculationProvider with ChangeNotifier {
   String get lowerLimit => _lowerLimit;
   String get upperLimit => _upperLimit;
   String? get additionalParam => _additionalParam;
+  String? get limitTo => _limitTo;
   CalculationResult? get result => _result;
   bool get isLoading => _isLoading;
+  bool get isOcrLoading => _isOcrLoading;
   String? get error => _error;
+  bool get ocrInitialized => _ocrInitialized;
 
   // 是否显示积分上下限输入
   bool get showIntegralLimits => _selectedType == CalculationType.integral;
@@ -71,6 +96,11 @@ class CalculationProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  void setLimitTo(String? to) {
+    _limitTo = to;
+    notifyListeners();
+  }
+
   void clearResult() {
     _result = null;
     _error = null;
@@ -83,6 +113,7 @@ class CalculationProvider with ChangeNotifier {
     _lowerLimit = '';
     _upperLimit = '';
     _additionalParam = null;
+    _limitTo = null;
     _result = null;
     _error = null;
     notifyListeners();
@@ -109,6 +140,7 @@ class CalculationProvider with ChangeNotifier {
         lowerLimit: _lowerLimit.isNotEmpty ? _lowerLimit : null,
         upperLimit: _upperLimit.isNotEmpty ? _upperLimit : null,
         additionalParam: _additionalParam,
+        to: _selectedType == CalculationType.limit ? _limitTo : null,
       );
 
       if (!_result!.success) {
@@ -161,5 +193,46 @@ class CalculationProvider with ChangeNotifier {
   Future<void> calculateMatrix() async {
     _selectedType = CalculationType.matrix;
     await calculate();
+  }
+
+  // OCR相关方法
+
+  /// 初始化OCR服务
+  Future<void> initOcr() async {
+    if (_ocrInitialized) return;
+
+    try {
+      await _ocrService.init();
+      _ocrInitialized = true;
+      notifyListeners();
+    } catch (e) {
+      print('Failed to init OCR: $e');
+    }
+  }
+
+  /// 从图片识别LaTeX公式
+  Future<void> recognizeFromImage(List<int> imageBytes) async {
+    if (!_ocrInitialized) {
+      await initOcr();
+    }
+
+    _isOcrLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final latex = await _ocrService.recognize(Uint8List.fromList(imageBytes));
+
+      if (latex.isNotEmpty) {
+        _expression = latex;
+      } else {
+        _error = '未能识别出公式';
+      }
+    } catch (e) {
+      _error = 'OCR识别失败: $e';
+    } finally {
+      _isOcrLoading = false;
+      notifyListeners();
+    }
   }
 }
